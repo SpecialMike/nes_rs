@@ -1,3 +1,5 @@
+use crate::Bus;
+
 #[repr(u8)]
 pub enum StatusFlag {
     Carry = 0,
@@ -42,7 +44,7 @@ struct Instr {
 	byte2: u8,
 }
 impl Instr {
-    pub fn get_address(&self) -> Option<u16> {
+    pub fn get_address(&self) -> Option<usize> {
         if self.addr_high.is_some() && self.addr_low.is_some() {
             Some(low_hi_to_u16(
                 self.addr_low.unwrap(),
@@ -52,7 +54,7 @@ impl Instr {
             None
         }
     }
-    pub fn get_pointer(&self) -> Option<u16> {
+    pub fn get_pointer(&self) -> Option<usize> {
         if self.pointer_low.is_some() {
 			let ptr_high = match self.pointer_high {
 				Some(p) => p,
@@ -94,19 +96,19 @@ impl Instr {
 											print!("{:0>2X} {:0>2X} {:0>2X}\t{} ${:0>4X}\t\t", self.op, self.byte1, self.byte2, self.name, low_hi_to_u16(self.byte1, self.byte2));
 				}
 				else {
-											print!("{:0>2X} {:0>2X} {:0>2X}\t{} ${:0>4X} = {:0>2X}\t", self.op, self.byte1, self.byte2, self.name, low_hi_to_u16(self.byte1, self.byte2), cpu.mmu.get_u8(low_hi_to_u16(self.byte1, self.byte2)));
+											print!("{:0>2X} {:0>2X} {:0>2X}\t{} ${:0>4X}\t\t", self.op, self.byte1, self.byte2, self.name, low_hi_to_u16(self.byte1, self.byte2));
 				}
 			}
     		AddressingMode::ABX => 			print!("{:0>2X} {:0>2X} {:0>2X}\t{} ${:0>4X},X\t\t", self.op, self.byte1, self.byte2, self.name, low_hi_to_u16(self.byte1, self.byte2)),
     		AddressingMode::ABY => 			print!("{:0>2X} {:0>2X} {:0>2X}\t{} ${:0>2X}{:0>2X},Y\t\t", self.op, self.byte1, self.byte2, self.name, self.byte2, self.byte1),
-    		AddressingMode::ZP => 			print!("{:0>2X} {:0>2X}   \t{} ${:0>2X} = {:0>2X}   \t", self.op, self.byte1, self.name, self.byte1, cpu.mmu.get_u8(low_hi_to_u16(self.byte1, 0x00))),
+    		AddressingMode::ZP => 			print!("{:0>2X} {:0>2X}   \t{} ${:0>2X}   \t\t", self.op, self.byte1, self.name, self.byte1),
     		AddressingMode::ZPX => 			print!("{:0>2X} {:0>2X}   \t{} ${:0>2X},X\t\t", self.op, self.byte1, self.name, self.byte1),
     		AddressingMode::ZPY => 			print!("{:0>2X}{}", self.op, self.name),
     		AddressingMode::REL => 			print!("{:0>2X} {:0>2X}   \t{} ${:0>4X}\t\t", self.op, self.byte1, self.name, low_hi_to_u16(self.byte1, 0x00) + cpu.pc + 0x2),
     		AddressingMode::IND => 			{
 				let pointer = low_hi_to_u16(self.byte1, self.byte2);
 				let pointer_offset = ((pointer + 1) & 0xFF) | (pointer & 0xFF00);
-											print!("{:0>2X} {:0>2X} {:0>2X}\t{} (${:0>4X}) = {:0>4X}", self.op, self.byte1, self.byte2, self.name, pointer, low_hi_to_u16(*cpu.mmu.get_u8(pointer),*cpu.mmu.get_u8(pointer_offset)));
+											print!("{:0>2X} {:0>2X} {:0>2X}\t{} (${:0>4X})\t", self.op, self.byte1, self.byte2, self.name, pointer);
 			},
     		AddressingMode::IZX => 			print!("{:0>2X} {:0>2X}    \t{} (${:0>2X},X) \t", self.op, self.byte1, self.name, self.byte1),
     		AddressingMode::IZY => 			print!("{:0>2X} {:0>2X}    \t{} (${:0>2X}),Y \t", self.op, self.byte1, self.name, self.byte1),
@@ -114,25 +116,25 @@ impl Instr {
 	}
 }
 
-fn low_hi_to_u16(low: u8, high: u8) -> u16 {
-    ((high as u16) << 8) | low as u16
+fn low_hi_to_u16(low: u8, high: u8) -> usize {
+    ((high as usize) << 8) | low as usize
 }
 
 pub struct CPU {
-    pc: u16,
+    pc: usize,
     sp: u8,
     p: u8,
     a: u8,
     x: u8,
     y: u8,
-    pub mmu: MMU,
+    pub bus: Bus,
     curr_instruction: Option<Instr>,
     curr_cycle: u8,
 	pub stopped: bool,
 	cycles: u64,
 }
 impl CPU {
-    pub fn new() -> CPU {
+    pub fn new(filename: &str) -> CPU {
         CPU {
             pc: 0xC000,
             sp: 0xFD,
@@ -140,9 +142,7 @@ impl CPU {
             a: 0,
             x: 0,
             y: 0,
-            mmu: MMU {
-                ram: vec![0; 0x10000],
-            },
+            bus: Bus::new(filename),
             curr_instruction: None,
             curr_cycle: 2,
 			stopped: false,
@@ -429,10 +429,10 @@ impl CPU {
     pub fn step(&mut self) {
 		self.cycles += 1;
         if self.curr_instruction.is_none() {
-			let op = self.mmu.get_u8(self.pc);
-			let byte1 = *self.mmu.get_u8(self.pc+1);
-			let byte2 = *self.mmu.get_u8(self.pc+2);
-			let instruction = CPU::decode_instr(*op, byte1, byte2);
+			let op = self.bus.read_u8(self.pc as usize);
+			let byte1 = self.bus.read_u8(self.pc+1);
+			let byte2 = self.bus.read_u8(self.pc+2);
+			let instruction = CPU::decode_instr(op, byte1, byte2);
 			print!("{:0>4X}\t", self.pc);
 			instruction.print_self(self);
 			print!("\tA:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X} PPU:{:X?},{:X?} CYC:{}\n", self.a, self.x, self.y, self.p, self.sp, 0, 0, self.cycles);
@@ -447,7 +447,7 @@ impl CPU {
     }
 
     pub fn push_stack(&mut self, data: u8) {
-        self.mmu.write_u8(self.sp as u16 + 0x0100, data);
+        self.bus.write_u8(self.sp as usize + 0x0100, data);
         self.sp -= 1;
     }
 
@@ -456,7 +456,7 @@ impl CPU {
         if self.sp != 0xFF {
             self.sp += 1;
         }
-        let data = *self.mmu.get_u8(self.sp as u16 + 0x0100);
+        let data = self.bus.read_u8(self.sp as usize + 0x0100);
         data
     }
 
@@ -477,20 +477,20 @@ impl CPU {
         self.push_stack(((self.pc >> 8) & 0x00FF) as u8);
     }
     fn pop_pcl(&mut self) {
-        self.pc = self.pc & 0xFF00 | self.pop_stack() as u16;
+        self.pc = self.pc & 0xFF00 | self.pop_stack() as usize;
     }
     fn pop_pch(&mut self) {
-        self.pc = self.pc & 0x00FF | ((self.pop_stack() as u16) << 8);
+        self.pc = self.pc & 0x00FF | ((self.pop_stack() as usize) << 8);
     }
-    fn get_pcl(&mut self, address: u16) {
-        self.pc = (self.pc & 0xFF00) | *self.mmu.get_u8(address) as u16;
+    fn get_pcl(&mut self, address: usize) {
+        self.pc = (self.pc & 0xFF00) | self.bus.read_u8(address) as usize;
     }
-    fn get_pch(&mut self, address: u16) {
-        self.pc = (self.pc & 0x00FF) | ((*self.mmu.get_u8(address) as u16) << 8);
+    fn get_pch(&mut self, address: usize) {
+        self.pc = (self.pc & 0x00FF) | ((self.bus.read_u8(address) as usize) << 8);
     }
     fn read_instr(&mut self) -> u8 {
         self.pc += 1;
-        *self.mmu.get_u8(self.pc - 1)
+        self.bus.read_u8(self.pc - 1)
     }
 
     //Addressing modes
@@ -500,7 +500,7 @@ impl CPU {
             3 => self.get_instr_mut().addr_high = Some(self.read_instr()),
             4 => {
                 self.get_instr_mut().data =
-                    Some(*self.mmu.get_u8(self.get_instr().get_address().unwrap()));
+                    Some(self.bus.read_u8(self.get_instr().get_address().unwrap()));
             }
             _ => {}
         }
@@ -521,7 +521,7 @@ impl CPU {
             }
             3 => {
                 self.get_instr_mut().data =
-                    Some(*self.mmu.get_u8(self.get_instr().get_address().unwrap()));
+                    Some(self.bus.read_u8(self.get_instr().get_address().unwrap()));
             }
             _ => {}
         }
@@ -541,13 +541,13 @@ impl CPU {
 			3 => self.get_instr_mut().pointer_high = Some(self.read_instr()),
 			4 => {
 				let pointer = self.get_instr().get_pointer().unwrap();
-				self.get_instr_mut().addr_low = Some(*self.mmu.get_u8(pointer));
+				self.get_instr_mut().addr_low = Some(self.bus.read_u8(pointer));
 			}
 			5 => {
 				let pointer = self.get_instr().get_pointer().unwrap();
 				//the pointer can't cross a page boundary!
 				let pointer_offset = ((pointer + 1) & 0xFF) | (pointer & 0xFF00);
-				self.get_instr_mut().addr_high = Some(*self.mmu.get_u8(pointer_offset));
+				self.get_instr_mut().addr_high = Some(self.bus.read_u8(pointer_offset));
 			}
 			_ => panic!("{}", self.curr_cycle)
 		}
@@ -561,7 +561,7 @@ impl CPU {
             }
             3 => {
                 //read from address (in case there are side-effects)
-                self.mmu.get_u8(self.get_instr().get_address().unwrap());
+                self.bus.read_u8(self.get_instr().get_address().unwrap());
                 //then add X to address
                 self.get_instr_mut().addr_low = Some(
                     (self.get_instr_mut().addr_low.unwrap() as u16 + self.x as u16 & 0xFF) as u8,
@@ -569,7 +569,7 @@ impl CPU {
             }
             4 => {
                 self.get_instr_mut().data =
-                    Some(*self.mmu.get_u8(self.get_instr().get_address().unwrap()));
+                    Some(self.bus.read_u8(self.get_instr().get_address().unwrap()));
             }
             _ => {}
         }
@@ -583,7 +583,7 @@ impl CPU {
             }
             3 => {
                 //read from address (in case there are side-effects)
-                self.mmu.get_u8(self.get_instr().get_address().unwrap());
+                self.bus.read_u8(self.get_instr().get_address().unwrap());
                 //then add X to address
                 self.get_instr_mut().addr_low = Some(
                     (self.get_instr_mut().addr_low.unwrap() as u16 + self.y as u16 & 0xFF) as u8,
@@ -591,7 +591,7 @@ impl CPU {
             }
             4 => {
                 self.get_instr_mut().data =
-                    Some(*self.mmu.get_u8(self.get_instr().get_address().unwrap()));
+                    Some(self.bus.read_u8(self.get_instr().get_address().unwrap()));
             }
             _ => {}
         }
@@ -609,17 +609,17 @@ impl CPU {
                 self.get_instr_mut().addr_low = Some((addr_low_offset & 0xFF) as u8);
             }
             4 => {
-                let data = self.mmu.get_u8(self.get_instr().get_address().unwrap());
+                let data = self.bus.read_u8(self.get_instr().get_address().unwrap());
                 if self.get_instr().fix_high_byte {
                     self.get_instr_mut().addr_high =
                         Some(self.get_instr_mut().addr_high.unwrap() + 0x1);
                 } else {
-                    self.get_instr_mut().data = Some(*data);
+                    self.get_instr_mut().data = Some(data);
                 }
             }
             5 => {
                 self.get_instr_mut().data =
-                    Some(*self.mmu.get_u8(self.get_instr().get_address().unwrap()));
+                    Some(self.bus.read_u8(self.get_instr().get_address().unwrap()));
             }
             _ => {}
         }
@@ -637,17 +637,17 @@ impl CPU {
                 self.get_instr_mut().addr_low = Some((addr_low_offset & 0xFF) as u8);
             }
             4 => {
-                let data = self.mmu.get_u8(self.get_instr().get_address().unwrap());
+                let data = self.bus.read_u8(self.get_instr().get_address().unwrap());
                 if self.get_instr().fix_high_byte {
                     self.get_instr_mut().addr_high =
                         Some(((self.get_instr_mut().addr_high.unwrap() as u16 + 0x1) & 0xFF) as u8);
                 } else {
-                    self.get_instr_mut().data = Some(*data);
+                    self.get_instr_mut().data = Some(data);
                 }
             }
             5 => {
                 self.get_instr_mut().data =
-                    Some(*self.mmu.get_u8(self.get_instr().get_address().unwrap()));
+                    Some(self.bus.read_u8(self.get_instr().get_address().unwrap()));
             }
             _ => {}
         }
@@ -662,7 +662,7 @@ impl CPU {
             3 => {
                 let pointer = self.get_instr().get_pointer().unwrap();
                 //read from pointer (in case there are side-effects)
-                self.mmu.get_u8(pointer);
+                self.bus.read_u8(pointer);
                 //then add X to pointer
                 self.get_instr_mut().pointer_low = Some(
                     ((self.get_instr_mut().pointer_low.unwrap() as u16 + self.x as u16) & 0xFF)
@@ -672,18 +672,18 @@ impl CPU {
             4 => {
                 //get low byte of address
                 self.get_instr_mut().addr_low =
-                    Some(*self.mmu.get_u8(self.get_instr().get_pointer().unwrap()));
+                    Some(self.bus.read_u8(self.get_instr().get_pointer().unwrap()));
             }
             5 => {
                 //get high byte of address
                 //this is at pointer + 1, but we have to make sure we don't cross the zero page boundary
                 let pointer = (self.get_instr().get_pointer().unwrap() + 1) & 0x00FF;
-                self.get_instr_mut().addr_high = Some(*self.mmu.get_u8(pointer));
+                self.get_instr_mut().addr_high = Some(self.bus.read_u8(pointer));
             }
             6 => {
                 //get data
                 self.get_instr_mut().data =
-                    Some(*self.mmu.get_u8(self.get_instr().get_address().unwrap()));
+                    Some(self.bus.read_u8(self.get_instr().get_address().unwrap()));
             }
             _ => {}
         }
@@ -694,18 +694,18 @@ impl CPU {
 			2 => self.get_instr_mut().pointer_low = Some(self.read_instr()),
 			3 => {
 				let pointer = self.get_instr().get_pointer().unwrap();
-				self.get_instr_mut().addr_low = Some(*self.mmu.get_u8(pointer));
+				self.get_instr_mut().addr_low = Some(self.bus.read_u8(pointer));
 			}
 			4 => {
 				let pointer = (self.get_instr().get_pointer().unwrap() + 1) & 0xFF;
-				self.get_instr_mut().addr_high = Some(*self.mmu.get_u8(pointer));
+				self.get_instr_mut().addr_high = Some(self.bus.read_u8(pointer));
 				let addr_low = self.get_instr().addr_low.unwrap();
 				let offset_addr_low = addr_low as u16 + self.y as u16;
 				self.get_instr_mut().fix_high_byte = offset_addr_low > 0xFF;
 				self.get_instr_mut().addr_low = Some((offset_addr_low & 0xFF) as u8);
 			}
 			5 => {
-				let data = *self.mmu.get_u8(self.get_instr().get_address().unwrap());
+				let data = self.bus.read_u8(self.get_instr().get_address().unwrap());
 				if self.get_instr().fix_high_byte {
 					let new_address_high = self.get_instr().addr_high.unwrap() as u16 + 1;
 					self.get_instr_mut().addr_high = Some((new_address_high & 0xFF) as u8);
@@ -719,7 +719,7 @@ impl CPU {
 			6 => {
 				//println!("Getting data from {:0>4X}", self.get_instr().get_address().unwrap());
 				self.get_instr_mut().data =
-                    Some(*self.mmu.get_u8(self.get_instr().get_address().unwrap()));
+                    Some(self.bus.read_u8(self.get_instr().get_address().unwrap()));
 			}
 			_ => {}
 		}
@@ -749,11 +749,11 @@ impl CPU {
         match self.curr_cycle {
 			4=> false,
             5 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 false
             }
             6 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 true
             }
             _ => unreachable!(),
@@ -764,11 +764,11 @@ impl CPU {
         match self.curr_cycle {
 			3 => false,//we end up here because we finish getting the data, then try to write it immediately
             4 => {
-				self.mmu.write_u8(address, data);
+				self.bus.write_u8(address, data);
                 false
             }
             5 => {
-				self.mmu.write_u8(address, data);
+				self.bus.write_u8(address, data);
                 true
             }
             _ => panic!("{}", self.curr_cycle),
@@ -787,11 +787,11 @@ impl CPU {
         match self.curr_cycle {
 			4 => false,
             5 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 false
             }
             6 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 true
             }
             _ => panic!("{}", self.curr_cycle),
@@ -808,11 +808,11 @@ impl CPU {
 			4 => false,
 			5 => false,
             6 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 false
             }
             7 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 true
             }
             _ => panic!("{}", self.curr_cycle),
@@ -824,11 +824,11 @@ impl CPU {
 			4 => false,
 			5 => false,
             6 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 false
             }
             7 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 true
             }
             _ => panic!("{}", self.curr_cycle),
@@ -839,11 +839,11 @@ impl CPU {
         match self.curr_cycle {
 			6=>false,
             7 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 false
             }
             8 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 true
             }
             _ => panic!("{}", self.curr_cycle),
@@ -854,11 +854,11 @@ impl CPU {
         match self.curr_cycle {
 			6 => false,
             7 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 false
             }
             8 => {
-                self.mmu.write_u8(address, data);
+                self.bus.write_u8(address, data);
                 true
             }
             _ => panic!("{}", self.curr_cycle),
@@ -950,7 +950,7 @@ impl CPU {
     fn pha(&mut self) {
         match self.curr_cycle {
             2 => {
-				self.mmu.get_u8(self.pc);
+				self.bus.read_u8(self.pc);
             }
             3 => {
                 self.push_stack(self.a);
@@ -963,7 +963,7 @@ impl CPU {
     fn php(&mut self) {
         match self.curr_cycle {
             2 => {
-				self.mmu.get_u8(self.pc);
+				self.bus.read_u8(self.pc);
             }
             3 => {
 				//set break flag before pushing to stack for some reason...
@@ -978,7 +978,7 @@ impl CPU {
     fn pla(&mut self) {
         match self.curr_cycle {
             2 => {
-                self.mmu.get_u8(self.pc);
+                self.bus.read_u8(self.pc);
             }
             3 => {
 				self.a = self.pop_stack();
@@ -992,7 +992,7 @@ impl CPU {
     fn plp(&mut self) {
         match self.curr_cycle {
             2 => {
-                self.mmu.get_u8(self.pc);
+                self.bus.read_u8(self.pc);
             }
             3 => {
 				//target -> 0b1010_1101 to 0b1110_1111
@@ -1010,7 +1010,7 @@ impl CPU {
         match self.curr_cycle {
             2 => {
                 //fetch low address byte and increment pc, store it to put in pcl later
-                self.get_instr_mut().addr_low = Some(*self.mmu.get_u8(self.pc));
+                self.get_instr_mut().addr_low = Some(self.bus.read_u8(self.pc));
                 self.pc += 1;
             }
             3 => {}
@@ -1018,7 +1018,7 @@ impl CPU {
             5 => self.push_pcl(),
             6 => {
 				//set pcl from previously fetched data
-				self.get_instr_mut().addr_high = Some(*self.mmu.get_u8(self.pc));
+				self.get_instr_mut().addr_high = Some(self.bus.read_u8(self.pc));
                 self.pc = self.get_instr().get_address().unwrap();
                 self.curr_instruction = None;
             }
@@ -1605,7 +1605,7 @@ impl CPU {
     fn sta(&mut self) {
         self.handle_addressing_mode_read();
         if self.get_instr().data.is_some() {
-			self.mmu.write_u8(self.get_instr().get_address().unwrap(), self.a);
+			self.bus.write_u8(self.get_instr().get_address().unwrap(), self.a);
 			if !((	(self.get_instr().mode == AddressingMode::IZY && self.curr_cycle == 5) ||
 					(self.get_instr().mode == AddressingMode::ABY && self.curr_cycle == 4) ||
 					(self.get_instr().mode == AddressingMode::ABX && self.curr_cycle == 4))
@@ -1619,7 +1619,7 @@ impl CPU {
     fn stx(&mut self) {
         self.handle_addressing_mode_read();
         if self.get_instr().data.is_some() {
-			self.mmu.write_u8(self.get_instr().get_address().unwrap(), self.x);
+			self.bus.write_u8(self.get_instr().get_address().unwrap(), self.x);
 			self.curr_instruction = None;
         }
     }
@@ -1627,7 +1627,7 @@ impl CPU {
     fn sty(&mut self) {
         self.handle_addressing_mode_read();
         if self.get_instr().data.is_some() {
-			self.mmu.write_u8(self.get_instr().get_address().unwrap(), self.y);
+			self.bus.write_u8(self.get_instr().get_address().unwrap(), self.y);
 			self.curr_instruction = None;
         }
     }
@@ -1635,7 +1635,7 @@ impl CPU {
     fn sax(&mut self) {
         self.handle_addressing_mode_read();
         if self.get_instr().data.is_some() {
-			self.mmu.write_u8(self.get_instr().get_address().unwrap(), self.a&self.x);
+			self.bus.write_u8(self.get_instr().get_address().unwrap(), self.a&self.x);
 			self.curr_instruction = None;
         }
     }
@@ -1661,14 +1661,14 @@ impl CPU {
 				//if the low byte of the pc + the offset is different, then we need to fix the high byte next cycle
 				let offset_is_negative = offset >> 7 == 0x1;
 				let mut fix_high_byte = false;
-				let new_address_low: u16;
+				let new_address_low: usize;
 				if offset_is_negative {
 					let pc_low = (self.pc & 0x00FF) | 0xFF00;//set the upper byte to FF so that we can detect a borrow
-					new_address_low = (pc_low as i16 + (offset as u16 | 0xFF00) as i16) as u16;
+					new_address_low = (pc_low as i16 + (offset as u16 | 0xFF00) as i16) as usize;
 				}
 				else{
 					let pc_low = self.pc & 0xFF;
-					new_address_low = pc_low + offset as u16;
+					new_address_low = pc_low + offset as usize;
 					if new_address_low > 0xFF {
 						fix_high_byte = true;
 					}
@@ -1812,111 +1812,22 @@ impl CPU {
     }
 }
 
-pub struct MMU {
-    pub ram: Vec<u8>,
-}
-impl MMU {
-    pub fn get_u8(&self, address: u16) -> &u8 {
-        //println!("Reading {:x?} from {:x?}", self.ram[address as usize], address);
-        //todo: memory mapping
-        &self.ram[address as usize]
-    }
-
-    pub fn write_u8(&mut self, address: u16, data: u8) {
-        //println!("Writing {:x?} to {:x?}", data, address);
-        self.ram[address as usize] = data;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::cpu::StatusFlag;
     use crate::CPU;
     #[test]
     fn cpu() {
-        let mut test_cpu = CPU::new();
-        //test status flags:
-        assert_eq!(test_cpu.get_status_flag(StatusFlag::Break), false);
-        test_cpu.set_status_flag(StatusFlag::Break, true);
-        assert_eq!(test_cpu.get_status_flag(StatusFlag::Break), true);
-        test_cpu.set_status_flag(StatusFlag::Carry, true);
-        assert_eq!(test_cpu.get_status_flag(StatusFlag::Carry), true);
-        test_cpu.set_status_flag(StatusFlag::Break, false);
-        assert_eq!(test_cpu.get_status_flag(StatusFlag::Break), false);
-        test_cpu.p = 0;
-
-        test_cpu.push_stack(0x01);
-        test_cpu.push_stack(0x02);
-        //the assumption is that when popping from stack, the sp is already decremented before the first pop (if multiple)
-        test_cpu.sp += 1;
-        assert_eq!(test_cpu.pop_stack(), 0x02);
-        assert_eq!(test_cpu.pop_stack(), 0x01);
+        
     }
 
     #[test]
     fn interrupt() {
-        let mut test_cpu = CPU::new();
-        test_cpu.pc = 0xBEEF;
-        test_cpu.p = 0b0010_0110;
-        test_cpu.curr_instruction = Some(CPU::decode_instr(0x00, 0, 0)); //brk
-        test_cpu.curr_cycle = 2;
-        for _ in 2..8 {
-            test_cpu.step();
-        }
-        assert!(test_cpu.curr_instruction.is_none());
-        test_cpu.curr_instruction = Some(CPU::decode_instr(0x40, 0, 0)); //rti
-        test_cpu.curr_cycle = 2;
-        for _ in 2..7 {
-            test_cpu.step();
-        }
-        assert!(test_cpu.curr_instruction.is_none());
-        assert_eq!(test_cpu.pc, 0xBEEF + 1);
-        assert_eq!(test_cpu.p, 0b0011_0110); //b flag is set after a break!
+        
     }
 
     #[test]
     fn add() {
-        //test base adding
-        let mut test_cpu = CPU::new();
-        test_cpu.set_status_flag(StatusFlag::Carry, true);
-        test_cpu.a = 1;
-        test_cpu.mmu.write_u8(0x0001, 0x00);
-        test_cpu.mmu.write_u8(0x0002, 0x10);
-        test_cpu.mmu.write_u8(0x1000, 1);
-        test_cpu.curr_instruction = Some(CPU::decode_instr(0x6D, 0, 0)); //adc, ABS
-        test_cpu.pc = 0x0001;
-        while !test_cpu.curr_instruction.is_none() {
-            test_cpu.step();
-        }
-        assert_eq!(test_cpu.a, 3);
-        assert_eq!(test_cpu.p, 0b0000_0000);
-
-        //test overflow
-        let mut test_cpu = CPU::new();
-        test_cpu.a = 123;
-        test_cpu.mmu.write_u8(0x0001, 0x00);
-        test_cpu.mmu.write_u8(0x0002, 0x10);
-        test_cpu.mmu.write_u8(0x1000, 45);
-        test_cpu.curr_instruction = Some(CPU::decode_instr(0x6D,0,0)); //adc, ABS
-        test_cpu.pc = 0x0001;
-        while !test_cpu.curr_instruction.is_none() {
-            test_cpu.step();
-        }
-        assert_eq!(test_cpu.a, 168);
-        assert_eq!(test_cpu.p, 0b1100_0000);
-
-        //test overflow and carry
-        let mut test_cpu = CPU::new();
-        test_cpu.a = 128;
-        test_cpu.mmu.write_u8(0x0001, 0x00);
-        test_cpu.mmu.write_u8(0x0002, 0x10);
-        test_cpu.mmu.write_u8(0x1000, 128);
-        test_cpu.curr_instruction = Some(CPU::decode_instr(0x6D,0,0)); //adc, ABS
-        test_cpu.pc = 0x0001;
-        while !test_cpu.curr_instruction.is_none() {
-            test_cpu.step();
-        }
-        assert_eq!(test_cpu.a, 0);
-        assert_eq!(test_cpu.p, 0b0100_0011);
+        
     }
 }
