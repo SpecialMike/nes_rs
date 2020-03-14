@@ -1,5 +1,7 @@
 use crate::Bus;
 
+const DBG_OUTPUT: bool = false;
+
 #[repr(u8)]
 pub enum StatusFlag {
     Carry = 0,
@@ -107,7 +109,6 @@ impl Instr {
     		AddressingMode::REL => 			print!("{:0>2X} {:0>2X}   \t{} ${:0>4X}\t\t", self.op, self.byte1, self.name, low_hi_to_u16(self.byte1, 0x00) + cpu.pc + 0x2),
     		AddressingMode::IND => 			{
 				let pointer = low_hi_to_u16(self.byte1, self.byte2);
-				let pointer_offset = ((pointer + 1) & 0xFF) | (pointer & 0xFF00);
 											print!("{:0>2X} {:0>2X} {:0>2X}\t{} (${:0>4X})\t", self.op, self.byte1, self.byte2, self.name, pointer);
 			},
     		AddressingMode::IZX => 			print!("{:0>2X} {:0>2X}    \t{} (${:0>2X},X) \t", self.op, self.byte1, self.name, self.byte1),
@@ -433,9 +434,11 @@ impl CPU {
 			let byte1 = self.bus.read_u8(self.pc+1);
 			let byte2 = self.bus.read_u8(self.pc+2);
 			let instruction = CPU::decode_instr(op, byte1, byte2);
-			print!("{:0>4X}\t", self.pc);
-			instruction.print_self(self);
-			print!("\tA:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X} PPU:{:X?},{:X?} CYC:{}\n", self.a, self.x, self.y, self.p, self.sp, 0, 0, self.cycles);
+			if DBG_OUTPUT {
+				print!("{:0>4X}\t", self.pc);
+				instruction.print_self(self);
+				print!("\tA:{:0>2X} X:{:0>2X} Y:{:0>2X} P:{:0>2X} SP:{:0>2X} PPU:{:X?},{:X?} CYC:{}\n", self.a, self.x, self.y, self.p, self.sp, 0, 0, self.cycles);
+			}
 			self.pc += 1;
             self.curr_instruction = Some(instruction);
 			self.curr_cycle = 2; //always start with 2 as the cycle, the first cycle is used to get the op from RAM[pc]
@@ -709,15 +712,12 @@ impl CPU {
 				if self.get_instr().fix_high_byte {
 					let new_address_high = self.get_instr().addr_high.unwrap() as u16 + 1;
 					self.get_instr_mut().addr_high = Some((new_address_high & 0xFF) as u8);
-					//println!("Taking extra cycle!");
 				}
 				else{
-					//println!("Getting data from {:0>4X}", self.get_instr().get_address().unwrap());
 					self.get_instr_mut().data = Some(data);
 				}
 			}
 			6 => {
-				//println!("Getting data from {:0>4X}", self.get_instr().get_address().unwrap());
 				self.get_instr_mut().data =
                     Some(self.bus.read_u8(self.get_instr().get_address().unwrap()));
 			}
@@ -740,7 +740,6 @@ impl CPU {
             AddressingMode::IZX => self.izx_read(),
 			AddressingMode::IZY => self.izy_read(),
 			AddressingMode::Implicit => self.get_instr_mut().data = Some(self.a),
-            _ => {}
         };
     }
 
@@ -1809,25 +1808,5 @@ impl CPU {
     fn clv(&mut self) {
         self.set_status_flag(StatusFlag::Overflow, false);
 		self.curr_instruction = None;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::cpu::StatusFlag;
-    use crate::CPU;
-    #[test]
-    fn cpu() {
-        
-    }
-
-    #[test]
-    fn interrupt() {
-        
-    }
-
-    #[test]
-    fn add() {
-        
     }
 }

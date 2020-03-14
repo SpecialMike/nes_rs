@@ -75,7 +75,6 @@ impl Mapper {
             Ok(_) => {}
             Err(e) => panic!("{}", e),
         };
-        println!("{:X?} header", buffer);
         let string = match std::str::from_utf8(&buffer[0..3]) {
             Ok(s) => s,
             Err(e) => panic!("{}", e),
@@ -88,8 +87,6 @@ impl Mapper {
         let mapper_number = (buffer[6] & 0xF0) as u16 >> 4
             | (buffer[7] & 0xF0) as u16
 			| (((buffer[8] & 0x0F) as u16) << 8);
-		println!("buffer 10: {:0>8b}", buffer[10]);
-		println!("buffer 11: {:0>8b}", buffer[11]);
         let sub_mapper_number = (buffer[8] & 0xF0) >> 4;
         let prg_ram_size_shift = buffer[10] & 0x0F;
         let prg_ram_size = match prg_ram_size_shift == 0 {
@@ -125,12 +122,8 @@ impl Mapper {
         //todo: non-volatile ram
         let prg_ram = vec![0; prg_ram_size];
 		let chr_ram = vec![0; chr_ram_size];
-		println!("PRG_RAM is {}", prg_ram_size);
-		println!("CHR_RAM is {}", chr_ram_size);
         let mut prg_rom = vec![0; prg_rom_size+1];
 		let mut chr_rom = vec![0; chr_rom_size+1];
-		println!("PRG_ROM is {:0>4X}", prg_rom_size);
-		println!("CHR_ROM is {:0>4X}", chr_rom_size);
 		//load the ROM areas
 		match file.read(&mut prg_rom) {
 			Ok(_) => {}
